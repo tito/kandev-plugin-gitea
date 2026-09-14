@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2] - 2026-09-14
+
+### Changed
+
+- fix: use valid category 'connector' instead of 'source-control' (807943b)
+
+
 ## [0.1.1] - 2026-09-14
 
 ### Changed

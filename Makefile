@@ -2,7 +2,7 @@
 	fmt vet package package-host verify-package verify-package-host clean
 
 BIN := bin/kandev-plugin-gitea
-VERSION := 0.1.1
+VERSION := 0.1.2
 STAGE := .build/stage
 PKG_OUT := kandev-plugin-gitea-$(VERSION).tar.gz
 
