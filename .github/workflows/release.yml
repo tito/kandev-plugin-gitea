@@ -1,8 +1,5 @@
 name: release
 
-# Run manually from GitHub Actions on main to calculate a version, commit the
-# release metadata and changelog, tag that commit, then build and publish it.
-# Existing v* tag pushes skip preparation and only build and publish.
 on:
   push:
     tags:
@@ -111,7 +108,6 @@ jobs:
           set -euo pipefail
           sed -i -E "s/^version: \"[0-9]+\.[0-9]+\.[0-9]+\"$/version: \"$VERSION\"/" manifest.yaml
           sed -i -E "s/^VERSION := [0-9]+\.[0-9]+\.[0-9]+$/VERSION := $VERSION/" Makefile
-          sed -i -E "s/kandev-plugin-template-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz/kandev-plugin-template-$VERSION.tar.gz/" README.md
 
           RANGE="${PREVIOUS_TAG:+$PREVIOUS_TAG..}HEAD"
           CHANGES="$(git log --no-merges --format='- %s (%h)' "$RANGE")"
@@ -137,7 +133,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add manifest.yaml Makefile README.md CHANGELOG.md
+          git add manifest.yaml Makefile CHANGELOG.md
           git commit -m "release: $VERSION"
           git push origin HEAD:main
           git tag -a "$TAG" -m "Release $VERSION"
@@ -165,7 +161,7 @@ jobs:
         with:
           repository: kdlbs/kandev
           path: kandev
-          ref: f218880ecbaa3d019d65b5d84fca6bdf160eced6
+          ref: 941e7950d1a94e8c028bf5cb98744415e053bf74
           sparse-checkout: |
             apps/backend
             apps/packages/plugin-sdk
@@ -201,13 +197,13 @@ jobs:
 
       - name: Extract checksums
         working-directory: plugin
-        run: tar -xzf kandev-plugin-template-*.tar.gz checksums.txt
+        run: tar -xzf kandev-plugin-gitea-*.tar.gz checksums.txt
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || needs.prepare.outputs.tag }}
           files: |
-            plugin/kandev-plugin-template-*.tar.gz
+            plugin/kandev-plugin-gitea-*.tar.gz
             plugin/checksums.txt
           generate_release_notes: true

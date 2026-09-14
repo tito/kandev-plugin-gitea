@@ -3,6 +3,8 @@ name: Build
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,7 +15,7 @@ permissions:
 
 jobs:
   package:
-    name: Build plugin packages
+    name: Build plugin package
     runs-on: ubuntu-latest
     steps:
       - name: Check out plugin
@@ -26,7 +28,7 @@ jobs:
         with:
           repository: kdlbs/kandev
           path: kandev
-          ref: f218880ecbaa3d019d65b5d84fca6bdf160eced6
+          ref: 941e7950d1a94e8c028bf5cb98744415e053bf74
           sparse-checkout: apps/backend
 
       - name: Set up Go
@@ -42,3 +44,10 @@ jobs:
       - name: Package and validate all supported platforms
         working-directory: plugin
         run: make verify-package
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kandev-plugin-gitea
+          path: plugin/kandev-plugin-gitea-*.tar.gz
+          if-no-files-found: error
