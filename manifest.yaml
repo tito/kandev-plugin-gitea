@@ -4,7 +4,7 @@ version: "0.1.1"
 display_name: "Gitea"
 description: "Source-control plugin for self-hosted Gitea instances: repositories, branches, pull requests, reviews, CI status, watches, and composer references."
 author: "tito"
-categories: ["source-control"]
+categories: ["connector"]
 
 min_kandev_version: "0.94.0"
 
