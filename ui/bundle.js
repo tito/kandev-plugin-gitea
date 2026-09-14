@@ -164,6 +164,162 @@ function parseGiteaPullRequestReference(reference) {
   return null;
 }
 
+function makeGiteaSettingsPage(host) {
+  const { jsx: h, ui, toast } = host;
+  const React = host.React;
+  const {
+    Alert, AlertDescription,
+    Badge,
+    Button,
+    Card, CardContent, CardDescription, CardHeader, CardTitle,
+    Input, Label,
+    Spinner,
+  } = ui;
+
+  return function GiteaSettingsPage({ workspaceId }) {
+    const [loading, setLoading] = React.useState(true);
+    const [saving, setSaving] = React.useState(false);
+    const [connected, setConnected] = React.useState(false);
+    const [login, setLogin] = React.useState("");
+    const [currentBaseURL, setCurrentBaseURL] = React.useState("");
+    const [baseURL, setBaseURL] = React.useState("");
+    const [pat, setPat] = React.useState("");
+    const [error, setError] = React.useState("");
+
+    React.useEffect(() => {
+      if (!workspaceId) return;
+      const controller = new AbortController();
+      host.api.invokeAction("connection.get", { workspaceId }, { signal: controller.signal })
+        .then((result) => {
+          if (controller.signal.aborted) return;
+          setConnected(!!result.connected);
+          setLogin(result.login || "");
+          setCurrentBaseURL(result.base_url || "");
+          setBaseURL(result.base_url || "");
+          setLoading(false);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          setLoading(false);
+        });
+      return () => controller.abort();
+    }, [workspaceId]);
+
+    function handleConnect() {
+      if (!baseURL.trim() || !pat.trim()) {
+        setError("Base URL and personal access token are required.");
+        return;
+      }
+      setError("");
+      setSaving(true);
+      host.api.invokeAction("connection.save", {
+        workspaceId,
+        body: { base_url: baseURL.trim(), pat: pat.trim() },
+      }).then((result) => {
+        setSaving(false);
+        if (result.connected) {
+          setConnected(true);
+          setLogin(result.login || "");
+          setCurrentBaseURL(result.base_url || baseURL.trim());
+          setPat("");
+          toast.success("Connected to Gitea as " + (result.login || "unknown"));
+        } else {
+          setError(result.error || "Connection failed.");
+        }
+      }).catch((err) => {
+        setSaving(false);
+        setError(err.message || "Connection failed.");
+      });
+    }
+
+    function handleDisconnect() {
+      setSaving(true);
+      host.api.invokeAction("connection.disconnect", { workspaceId })
+        .then(() => {
+          setSaving(false);
+          setConnected(false);
+          setLogin("");
+          setCurrentBaseURL("");
+          setPat("");
+          toast.success("Disconnected from Gitea");
+        })
+        .catch((err) => {
+          setSaving(false);
+          setError(err.message || "Disconnect failed.");
+        });
+    }
+
+    if (loading) {
+      return h("div", { className: "flex items-center gap-2 p-4" },
+        h(Spinner, { className: "h-4 w-4" }),
+        "Loading connection status..."
+      );
+    }
+
+    if (connected) {
+      return h("div", { className: "space-y-4" },
+        h(Alert, {
+          className: "border-green-500/40 bg-green-500/10 dark:border-green-400/30 dark:bg-green-400/10",
+        },
+          h(AlertDescription, { className: "text-sm font-medium" },
+            "Connected to ", h("span", { className: "font-semibold" }, currentBaseURL),
+            " as ", h(Badge, { variant: "outline" }, login)
+          )
+        ),
+        h("div", { className: "flex gap-2" },
+          h(Button, {
+            variant: "destructive",
+            size: "sm",
+            onClick: handleDisconnect,
+            disabled: saving,
+          }, saving ? "Disconnecting..." : "Disconnect")
+        )
+      );
+    }
+
+    return h("div", { className: "space-y-4" },
+      error ? h(Alert, { variant: "destructive" },
+        h(AlertDescription, null, error)
+      ) : null,
+      h("div", { className: "space-y-2" },
+        h(Label, { htmlFor: "gitea-base-url" }, "Gitea URL"),
+        h(Input, {
+          id: "gitea-base-url",
+          placeholder: "https://gitea.example.com",
+          value: baseURL,
+          onChange: (e) => setBaseURL(e.target.value),
+          disabled: saving,
+        }),
+        h("p", { className: "text-muted-foreground text-xs" },
+          "The HTTPS URL of your Gitea instance."
+        )
+      ),
+      h("div", { className: "space-y-2" },
+        h(Label, { htmlFor: "gitea-pat" }, "Personal access token"),
+        h(Input, {
+          id: "gitea-pat",
+          type: "password",
+          placeholder: "Enter your Gitea PAT",
+          value: pat,
+          onChange: (e) => setPat(e.target.value),
+          disabled: saving,
+        }),
+        h("p", { className: "text-muted-foreground text-xs" },
+          "Generate a token at your Gitea instance under Settings > Applications. ",
+          "Required scopes: read:user, read:repository, write:repository, read:issue, write:issue."
+        )
+      ),
+      h("div", { className: "flex gap-2" },
+        h(Button, {
+          size: "sm",
+          onClick: handleConnect,
+          disabled: saving || !baseURL.trim() || !pat.trim(),
+        }, saving ? "Connecting..." : "Connect")
+      )
+    );
+  };
+}
+
 window.registerKandevPlugin("kandev-plugin-gitea", {
   initialize(registry, host) {
     const PROVIDER_ID = "gitea";
@@ -316,6 +472,15 @@ window.registerKandevPlugin("kandev-plugin-gitea", {
           error: null,
         });
       },
+    });
+
+    // --- Integration settings page (connection configuration) ---
+    registry.registerIntegrationSettings({
+      id: PROVIDER_ID,
+      label: LABEL,
+      description: "Connect a self-hosted Gitea instance to this workspace.",
+      icon: { render: (h) => giteaIcon(h) },
+      Component: makeGiteaSettingsPage(host),
     });
 
     this._overlays = overlays;
