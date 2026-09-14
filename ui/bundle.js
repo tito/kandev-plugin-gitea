@@ -1,470 +1,331 @@
-// kandev plugin UI bundle — the frontend half of this plugin.
-//
-// This is a hand-written, NO-BUILD plain-JS ES module. It ships byte-for-byte
-// inside the package tar.gz under ui/bundle.js, and kandev serves it directly
-// from the extracted package at GET /api/plugins/<id>/ui/bundle.js, then
-// dynamically imports it as a native ES module. There is nothing to build:
-// edit this file and repackage (`make package` / `make package-host`).
-//
-// The contract, in three touch points:
-//   - window.registerKandevPlugin(id, { initialize, destroy }) is the single
-//     global entry point the host calls once this module has been evaluated.
-//     `id` MUST match manifest.yaml's id.
-//   - The `host` object handed to initialize() carries the SHARED host React
-//     instance (`host.React`, `host.jsx` == host.React.createElement) plus a
-//     curated design system (`host.ui`), imperative toasts (`host.toast`),
-//     shared helpers (`host.utils`), the live theme (`host.theme` /
-//     `host.onThemeChange`), provider-neutral context (`host.context`), and
-//     navigation (`host.navigate`). NEVER import or bundle your own React —
-//     that breaks hook identity across the host tree. The same goes for
-//     recharts: use the `host.ui.Chart*` wrappers, because a second copy splits the
-//     context its tooltips and legends resolve through, exactly like React.
-//   - `registry` is where you declare nav items, routes, slot components,
-//     providers, task actions, review surfaces, and WS handlers. Every
-//     registration is tracked under this plugin's id, so
-//     the host bulk-unregisters everything when the plugin is disabled.
-//
-// `host.ui` is much broader than the few components used below — Accordion*,
-// Collapsible*, Select*, Tabs*, Sheet*, Pagination*, ScrollArea, Skeleton,
-// Switch, the Chart* recharts wrappers, and kandev's own PageTopbar,
-// Combobox and TaskCreateDialog are all there. Reach for one before
-// hand-rolling: a styled <div> progress bar or a getBoundingClientRect
-// popover will drift from the app around it. The authoritative list is
-// `apps/web/lib/plugins/host-api.ts` (`PLUGIN_UI`) in the kandev repo.
-//
-// Everything in this file is meant to be deleted piece by piece. The page
-// below is one Card built from independent parts — Popover, Progress, Table,
-// Empty — each of which can be removed without touching the others.
-//
-// Rename "kandev-plugin-template" below to your plugin id, then keep / delete
-// registrations to match what your plugin actually contributes.
+// Gitea plugin UI bundle — source-control recipe, inlined as plain JS.
+// Registers a repository provider, review provider, and task link action
+// that delegate to the plugin backend through host.api.invokeAction.
 
-// ---------------------------------------------------------------------------
-// A tiny module-level pub/sub holding the most recent task.created deliveries.
-// Kept outside any component so the list survives route navigation and is
-// shared by every subscriber. Delete this if you don't register a WS handler.
-// ---------------------------------------------------------------------------
-
-// How many deliveries we keep. Also the denominator of the Progress bar below,
-// which is the honest thing for it to show: how full this buffer is.
-const RECENT_LIMIT = 5;
-
-let recentTasks = []; // newest first, capped at RECENT_LIMIT
-const recentListeners = new Set();
-
-function publishRecentTasks(next) {
-  recentTasks = next;
-  for (const listener of recentListeners) listener(recentTasks);
+function record(value) {
+  return value !== null && typeof value === "object" ? value : {};
+}
+function text(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function nonNegativeInteger(value) {
+  const n = finiteNumber(value);
+  return n !== undefined && Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+function positiveInteger(value) {
+  const n = nonNegativeInteger(value);
+  return n !== undefined && n > 0 ? n : undefined;
 }
 
-// recordTask turns one task.created WS payload into a row. The payload is the
-// backend's task event shape (snake_case: task_id, title, workspace_id, ...);
-// it carries no "delivered at" field, so we stamp arrival ourselves — that is
-// the timestamp the table renders through host.utils.formatRelativeTime.
-function recordTask(payload) {
-  const task = payload || {};
-  const entry = {
-    taskId: task.task_id || "unknown",
-    title: task.title || "Untitled task",
-    seenAt: new Date().toISOString(),
-  };
-  publishRecentTasks([entry, ...recentTasks].slice(0, RECENT_LIMIT));
-}
-
-// useRecentTasks re-renders its component whenever publishRecentTasks fires.
-// Built on host.React's useState/useEffect since this bundle can't ship its
-// own useSyncExternalStore without bundling React.
-function useRecentTasks(React) {
-  const [tasks, setTasks] = React.useState(recentTasks);
-  React.useEffect(() => {
-    // Resync first: a delivery may have landed between the initial render and
-    // this subscription.
-    setTasks(recentTasks);
-    recentListeners.add(setTasks);
-    return () => recentListeners.delete(setTasks);
-  }, []);
-  return tasks;
-}
-
-// ---------------------------------------------------------------------------
-// useHostTheme — the live light/dark theme, as component state.
-//
-// `host.theme` is a getter evaluated on every access, but `host` is built once
-// per plugin load: read it into a variable that outlives a render and you have
-// frozen it. Anything that only *styles* things can ignore this entirely —
-// every host.ui component and every Tailwind/CSS-variable class already
-// follows the theme on its own. You need this hook for the narrow case where
-// your plugin computes a color itself (canvas painting, an inline SVG fill,
-// a color passed to a chart) or, as below, displays the theme.
-//
-// Delete this together with whatever reads it.
-// ---------------------------------------------------------------------------
-function useHostTheme(host) {
-  const React = host.React;
-  const [theme, setTheme] = React.useState(host.theme);
-  React.useEffect(() => {
-    setTheme(host.theme); // resync, same reason as above
-    // onThemeChange returns its own unsubscribe — returning it straight from
-    // the effect is the whole teardown. Skipping it leaks a listener that
-    // outlives the component.
-    return host.onThemeChange(setTheme);
-  }, []);
-  return theme;
-}
-
-// ---------------------------------------------------------------------------
-// Inline SVG icons. The bundle ships no build step and can't import an icon
-// set (that would mean bundling), so glyphs are drawn by hand at 16px to match
-// first-party icons. Swap for your own.
-// ---------------------------------------------------------------------------
-function icon(h, path, size) {
-  return h(
-    "svg",
-    {
-      xmlns: "http://www.w3.org/2000/svg",
-      width: size || 16,
-      height: size || 16,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor", // follows the theme with no JS — see useHostTheme
-      strokeWidth: 2,
-      strokeLinecap: "round",
-      strokeLinejoin: "round",
-      "aria-hidden": "true",
+function createSnapshotStore() {
+  const snapshots = new Map();
+  const listeners = new Map();
+  const versions = new Map();
+  let epoch = 0;
+  return {
+    get: (key) => snapshots.get(key) ?? [],
+    subscribe(key, listener) {
+      const kl = listeners.get(key) ?? new Set();
+      kl.add(listener);
+      listeners.set(key, kl);
+      return () => { kl.delete(listener); if (kl.size === 0) listeners.delete(key); };
     },
-    h("path", { d: path }),
-  );
-}
-
-const STAR_PATH = "M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 18l-6.1 3.4 1.4-6.8L2.2 9.9l6.9-.8L12 2z";
-const INFO_PATH = "M12 16v-4M12 8h.01M12 21a9 9 0 100-18 9 9 0 000 18z";
-const INBOX_PATH = "M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v6a2 2 0 01-2 2H4a2 2 0 01-2-2v-6l3.5-7z";
-
-// The host renders shortcuts with the platform's own modifier glyph; match it
-// rather than hard-coding "Ctrl", which is simply wrong on macOS.
-const MOD_KEY = /Mac|iPhone|iPad/i.test((navigator && navigator.platform) || "") ? "⌘" : "Ctrl";
-
-// ---------------------------------------------------------------------------
-// A native route/page, rendered inside the kandev SPA (not an iframe) from the
-// host's own design system. The host renders its first-party title bar above
-// this page; here we contribute only the body.
-// ---------------------------------------------------------------------------
-function makePluginPage(host) {
-  const { jsx: h, ui, toast, utils } = host;
-  const {
-    Button,
-    Card,
-    CardAction,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-    Empty,
-    EmptyDescription,
-    EmptyHeader,
-    EmptyMedia,
-    EmptyTitle,
-    Kbd,
-    KbdGroup,
-    Popover,
-    PopoverContent,
-    PopoverDescription,
-    PopoverHeader,
-    PopoverTitle,
-    PopoverTrigger,
-    Progress,
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-  } = ui;
-
-  // AboutPopover — host.ui.Popover*, positioned by the host (Radix), so it
-  // flips and clamps at the viewport edge without any getBoundingClientRect
-  // math of your own. Delete this and the CardAction wrapping it together.
-  function AboutPopover() {
-    // The one thing on this page that genuinely needs a theme subscription:
-    // it prints the resolved value, so a stale read is visible as a wrong
-    // label when the user flips the theme with this popover open.
-    const theme = useHostTheme(host);
-
-    return h(
-      Popover,
-      null,
-      h(
-        PopoverTrigger,
-        { asChild: true },
-        h(
-          Button,
-          {
-            id: "template-about-trigger",
-            type: "button",
-            variant: "ghost",
-            size: "icon",
-            className: "h-7 w-7",
-            "aria-label": "About this page",
-          },
-          icon(h, INFO_PATH),
-        ),
-      ),
-      h(
-        PopoverContent,
-        { align: "end", className: "w-80" },
-        h(
-          PopoverHeader,
-          null,
-          h(PopoverTitle, null, "Where these rows come from"),
-          h(
-            PopoverDescription,
-            null,
-            "The registerWsHandler(\"task.created\", ...) call at the bottom of ",
-            "ui/bundle.js. It fires for every task created anywhere in kandev ",
-            "while this tab is open — no polling, no refetch.",
-          ),
-        ),
-        h(
-          "p",
-          { className: "text-muted-foreground mt-3 text-xs" },
-          "Create one with ",
-          // host.ui.Kbd renders a key the same way the app's own shortcut
-          // surfaces do. This is kandev's real "new task" binding.
-          h(KbdGroup, null, h(Kbd, null, MOD_KEY), h(Kbd, null, "N")),
-          " to watch a row appear.",
-        ),
-        h(
-          "p",
-          { id: "template-theme-readout", className: "text-muted-foreground mt-3 text-xs" },
-          `Host theme: ${theme}. `,
-          "Everything above follows it with no JS — host.ui components and CSS ",
-          "variables restyle themselves. Subscribe via host.onThemeChange only ",
-          "for colors you compute yourself.",
-        ),
-      ),
-    );
-  }
-
-  // RecentTasksTable / EmptyState — the two halves of the same slot. Keep
-  // whichever matches your data and delete the other; an empty state built
-  // from host.ui.Empty* costs nothing and stops your page from looking broken
-  // before its first delivery.
-  function RecentTasksTable({ tasks }) {
-    return h(
-      Table,
-      null,
-      h(
-        TableHeader,
-        null,
-        h(
-          TableRow,
-          null,
-          h(TableHead, null, "Task"),
-          h(TableHead, { className: "w-32 text-right" }, "Seen"),
-        ),
-      ),
-      h(
-        TableBody,
-        null,
-        tasks.map((task) =>
-          h(
-            TableRow,
-            { key: `${task.taskId}-${task.seenAt}` },
-            h(TableCell, { className: "font-medium" }, task.title),
-            h(
-              TableCell,
-              { className: "text-muted-foreground text-right text-xs" },
-              // host.utils.formatRelativeTime is locale-aware
-              // (Intl.RelativeTimeFormat) in the user's active locale. A
-              // hand-rolled "3 minutes ago" ladder is English-only by
-              // construction and silently untranslated for everyone else.
-              utils.formatRelativeTime(task.seenAt),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  function EmptyState() {
-    return h(
-      Empty,
-      { id: "template-page-empty" },
-      h(
-        EmptyHeader,
-        null,
-        h(EmptyMedia, { variant: "icon" }, icon(h, INBOX_PATH)),
-        h(EmptyTitle, null, "No tasks created yet"),
-        h(
-          EmptyDescription,
-          null,
-          "This page fills in as tasks are created while it is open.",
-        ),
-      ),
-    );
-  }
-
-  return function PluginPage() {
-    const tasks = useRecentTasks(host.React);
-    const isEmpty = tasks.length === 0;
-
-    // One action, wired to both toast variants. host.toast is imperative — the
-    // host mounts the single <Toaster/>, so there is nothing to render and it
-    // works from anywhere, including inside host.openModal content.
-    //
-    // The button stays enabled when the buffer is empty on purpose: that is
-    // what makes the .error path reachable. toast.error renders like any other
-    // variant and logs `[plugins] toast.error from "<id>"` to the console, but
-    // deliberately files NO backend error report — kandev's error log is for
-    // kandev's own faults, not a plugin reporting an expected condition.
-    const onClear = () => {
-      if (isEmpty) {
-        toast.error("Nothing to clear yet");
-        return;
-      }
-      const cleared = tasks.length;
-      publishRecentTasks([]);
-      toast.success(`Cleared ${cleared} row${cleared === 1 ? "" : "s"}`);
-    };
-
-    return h(
-      "div",
-      { className: "p-4 max-w-2xl" },
-      h(
-        Card,
-        null,
-        h(
-          CardHeader,
-          null,
-          h(CardTitle, { id: "template-page-title" }, "Template plugin"),
-          h(CardDescription, null, `The ${RECENT_LIMIT} most recent tasks created since this page loaded`),
-          h(CardAction, null, h(AboutPopover)),
-        ),
-        h(
-          CardContent,
-          null,
-          // host.ui.Progress takes a 0-100 value. Used here for what it is
-          // actually good at: a bounded ratio. Don't reach for it to fake an
-          // indeterminate spinner — host.ui.Spinner is that.
-          h(
-            "div",
-            { className: "mb-4" },
-            h(Progress, { id: "template-page-progress", value: (tasks.length / RECENT_LIMIT) * 100 }),
-            h(
-              "p",
-              {
-                // host.utils.cn is the host's own clsx + tailwind-merge
-                // combiner, so conditional classes merge the same way they do
-                // in the components they sit next to.
-                className: utils.cn(
-                  "mt-2 text-xs",
-                  isEmpty ? "text-muted-foreground/60" : "text-muted-foreground",
-                ),
-              },
-              `buffer ${tasks.length} of ${RECENT_LIMIT}`,
-            ),
-          ),
-          isEmpty ? h(EmptyState) : h(RecentTasksTable, { tasks }),
-          h(
-            "div",
-            { className: "mt-4 flex justify-end" },
-            h(
-              Button,
-              {
-                id: "template-page-clear",
-                type: "button",
-                variant: "outline",
-                size: "sm",
-                onClick: onClear,
-              },
-              "Clear",
-            ),
-          ),
-        ),
-      ),
-    );
+    beginRefresh(key) {
+      const version = (versions.get(key) ?? 0) + 1;
+      versions.set(key, version);
+      return { epoch, version };
+    },
+    commit(key, token, values) {
+      if (token.epoch !== epoch || versions.get(key) !== token.version) return false;
+      snapshots.set(key, [...values]);
+      const kl = listeners.get(key);
+      if (kl) kl.forEach((fn) => fn());
+      return true;
+    },
+    clear() {
+      epoch += 1;
+      versions.clear();
+      snapshots.clear();
+      listeners.forEach((kl) => kl.forEach((fn) => fn()));
+      listeners.clear();
+    },
   };
 }
 
-// ---------------------------------------------------------------------------
-// A component for the "chat-input-actions" slot: an icon button rendered in
-// the chat composer toolbar, beside the model picker, mic, and send. The host
-// passes { sessionId, taskId, taskTitle } as slotProps, so the button knows
-// which task/session the user is looking at.
-// ---------------------------------------------------------------------------
-function makeChatToolbarAction(host) {
-  const { jsx: h, ui } = host;
-  const { Button, Tooltip, TooltipTrigger, TooltipContent } = ui;
+function normalizeTaskStatus(value) {
+  const s = record(value);
+  const number = positiveInteger(s.number);
+  const state = text(s.state);
+  const pipelineState = text(s.pipeline_state);
+  if (number === undefined ||
+    !["open", "merged", "closed", "draft"].includes(state) ||
+    !["success", "failure", "pending", "neutral"].includes(pipelineState))
+    return undefined;
 
-  return function ChatToolbarAction({ slotProps }) {
-    const ctx = slotProps || {};
-    const label = ctx.taskTitle || ctx.taskId;
-    const tooltip = label ? `Template — open page (task: ${label})` : "Template — open page";
+  const checks = Array.isArray(s.checks) ? s.checks.flatMap((v) => {
+    const c = record(v);
+    const id = text(c.id), label = text(c.label), cs = text(c.state);
+    if (!id || !label || !["success", "failure", "pending", "neutral"].includes(cs)) return [];
+    const detail = text(c.detail), url = text(c.url);
+    return [{ id, label, state: cs, ...(detail ? { detail } : {}), ...(url ? { url } : {}) }];
+  }) : [];
 
-    // A plain Tooltip needs no provider of your own: the app shell mounts one,
-    // and host.openModal content gets its own, so this works inside a plugin
-    // modal too. host.ui.TooltipProvider is exported only for when you want a
-    // custom delayDuration over a dense cluster of tooltips.
-    return h(
-      Tooltip,
-      null,
-      h(
-        TooltipTrigger,
-        { asChild: true },
-        h(
-          Button,
-          {
-            id: "template-chat-action",
-            type: "button",
-            variant: "ghost",
-            size: "icon",
-            className: "h-7 w-7 cursor-pointer hover:bg-muted/40",
-            "aria-label": tooltip,
-            onClick: () => host.navigate("/template"),
-          },
-          icon(h, STAR_PATH),
-        ),
-      ),
-      h(TooltipContent, null, tooltip),
-    );
+  const rs = record(s.review);
+  const reviewState = text(rs.state);
+  const approved = nonNegativeInteger(rs.approved);
+  const required = nonNegativeInteger(rs.required);
+  const requested = nonNegativeInteger(rs.requested);
+  const review = approved !== undefined && ["approved", "changes_requested", "pending"].includes(reviewState)
+    ? { state: reviewState, approved, ...(required === undefined ? {} : { required }), ...(requested === undefined ? {} : { requested }) }
+    : undefined;
+  const unresolvedComments = nonNegativeInteger(s.unresolved_comments);
+  const updatedAt = finiteNumber(s.updated_at);
+
+  return {
+    number, state, pipelineState, checks,
+    ...(review ? { review } : {}),
+    ...(unresolvedComments === undefined ? {} : { unresolvedComments }),
+    ...(updatedAt === undefined ? {} : { updatedAt }),
   };
 }
 
-// ---------------------------------------------------------------------------
-// Registration. Keep only what your plugin uses.
-// ---------------------------------------------------------------------------
-window.registerKandevPlugin("kandev-plugin-template", {
+function normalizeReview(providerId, value) {
+  const s = record(value);
+  const reviewKey = text(s.review_key), title = text(s.title), url = text(s.url);
+  const connectionScope = text(s.connection_scope), repositoryId = text(s.repository_id);
+  const changeRequestNumber = positiveInteger(s.change_request_number);
+  if (!reviewKey || !title || !url || !connectionScope || !repositoryId || changeRequestNumber === undefined) return null;
+  const state = text(s.state);
+  const taskStatus = normalizeTaskStatus(s.task_status);
+  return { providerId, reviewKey, title, url, connectionScope, repositoryId, changeRequestNumber, state, ...(taskStatus ? { taskStatus } : {}) };
+}
+
+function normalizeAssociation(providerId, value) {
+  const s = record(value);
+  const taskId = text(s.task_id), reviewKey = text(s.review_key);
+  const connectionScope = text(s.connection_scope), repositoryId = text(s.repository_id);
+  const changeRequestNumber = positiveInteger(s.change_request_number);
+  if (!taskId || !reviewKey || !connectionScope || !repositoryId || changeRequestNumber === undefined) return null;
+  return { providerId, taskId, reviewKey, connectionScope, repositoryId, changeRequestNumber };
+}
+
+function normalizeRepository(providerId, value) {
+  const s = record(value);
+  const providerHost = text(s.provider_host), ownerOrProject = text(s.owner_or_project);
+  const repositoryId = text(s.repository_id), repositoryName = text(s.name);
+  const cloneUrl = text(s.clone_url);
+  if (!providerHost || !ownerOrProject || !repositoryId || !repositoryName || !cloneUrl) return null;
+  const providerScope = text(s.provider_scope);
+  const defaultBranch = text(s.default_branch);
+  return {
+    providerId, providerHost,
+    ...(providerScope ? { providerScope } : {}),
+    ownerOrProject, repositoryId, repositoryName, cloneUrl,
+    ...(defaultBranch ? { defaultBranch } : {}),
+  };
+}
+
+function credentialFreeRepository(repo) {
+  return {
+    provider_id: repo.providerId,
+    provider_host: repo.providerHost,
+    provider_scope: repo.providerScope ?? "",
+    provider_repository_id: repo.repositoryId,
+    owner_or_project: repo.ownerOrProject,
+    name: repo.repositoryName,
+    clone_url: repo.cloneUrl,
+    default_branch: repo.defaultBranch ?? "",
+  };
+}
+
+// Gitea icon: a stylized tea cup (simplified).
+const GITEA_ICON_PATH = "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z";
+
+function giteaIcon(h, size) {
+  return h("svg", {
+    xmlns: "http://www.w3.org/2000/svg", width: size || 16, height: size || 16,
+    viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+    strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true",
+  }, h("path", { d: GITEA_ICON_PATH }));
+}
+
+function parseGiteaPullRequestReference(reference) {
+  const trimmed = reference.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length >= 4 && parts[2] === "pulls") return `${parts[0]}/${parts[1]}#${parts[3]}`;
+  } catch { /* not a URL */ }
+  if (/^[^/]+\/[^#]+#\d+$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+window.registerKandevPlugin("kandev-plugin-gitea", {
   initialize(registry, host) {
-    // A sidebar entry. `icon` is a curated host icon name; it also becomes the
-    // default topbar icon for the route registered on the same path.
-    registry.registerNavItem({
-      id: "template",
-      label: "Template",
-      path: "/template",
-      icon: "puzzle",
-      section: "main",
+    const PROVIDER_ID = "gitea";
+    const LABEL = "Gitea";
+    const NOUN = "pull request";
+
+    const reviewStore = createSnapshotStore();
+    const associationStore = createSnapshotStore();
+    const overlays = new Set();
+
+    async function refreshReviews(taskId, signal, workspaceId) {
+      const token = reviewStore.beginRefresh(taskId);
+      signal.throwIfAborted();
+      const response = await host.api.invokeAction("change_requests.get", { ...(workspaceId ? { workspaceId } : {}), taskId }, { signal });
+      signal.throwIfAborted();
+      reviewStore.commit(taskId, token, (response.reviews ?? []).flatMap((r) => {
+        const n = normalizeReview(PROVIDER_ID, r);
+        return n ? [n] : [];
+      }));
+    }
+
+    async function refreshAssociations(workspaceId, signal) {
+      const token = associationStore.beginRefresh(workspaceId);
+      signal.throwIfAborted();
+      const response = await host.api.invokeAction("change_requests.associations", { workspaceId }, { signal });
+      signal.throwIfAborted();
+      associationStore.commit(workspaceId, token, (response.associations ?? []).flatMap((a) => {
+        const n = normalizeAssociation(PROVIDER_ID, a);
+        return n ? [n] : [];
+      }));
+    }
+
+    async function refreshAfterMutation(workspaceId, taskId, signal) {
+      try { await Promise.all([refreshReviews(taskId, signal, workspaceId), refreshAssociations(workspaceId, signal)]); }
+      catch { /* mutation already succeeded */ }
+    }
+
+    registry.registerRepositoryProvider({
+      id: PROVIDER_ID,
+      label: LABEL,
+      icon: { render: (h) => giteaIcon(h) },
+      supportsDraft: true,
+
+      async listRepositories({ workspaceId, query = "", cursor = "", limit = 100, signal }) {
+        signal.throwIfAborted();
+        const response = await host.api.invokeAction("repositories.list", { workspaceId, body: { query, cursor, limit } }, { signal });
+        signal.throwIfAborted();
+        return {
+          repositories: (response.repositories ?? []).flatMap((r) => { const n = normalizeRepository(PROVIDER_ID, r); return n ? [n] : []; }),
+          nextCursor: text(response.next_cursor) || undefined,
+        };
+      },
+
+      async listBranches({ workspaceId, repository, signal }) {
+        signal.throwIfAborted();
+        const response = await host.api.invokeAction("repositories.branches", { workspaceId, body: { repository: credentialFreeRepository(repository) } }, { signal });
+        signal.throwIfAborted();
+        return (response.branches ?? []).flatMap((b) => { const name = text(record(b).name); return name ? [{ name }] : []; });
+      },
+
+      async inspectURL({ workspaceId, url, signal }) {
+        signal.throwIfAborted();
+        const response = await host.api.invokeAction("repositories.inspect", { workspaceId, body: { url } }, { signal });
+        signal.throwIfAborted();
+        return normalizeRepository(PROVIDER_ID, response.repository);
+      },
+
+      async createChangeRequest({ workspaceId, taskId, sessionId, repositoryId, title, body, baseBranch, draft, signal }) {
+        signal.throwIfAborted();
+        const response = await host.api.invokeAction("change_requests.create", {
+          workspaceId, taskId, sessionId, repositoryId,
+          body: { title, description: body, destination: baseBranch ?? "", draft },
+        }, { signal });
+        const url = text(response.url);
+        if (!url) throw new Error("Gitea plugin: create response did not include a URL");
+        await refreshAfterMutation(workspaceId, taskId, signal);
+        const output = text(response.output);
+        const associationError = text(response.association_error);
+        return {
+          url, provider: PROVIDER_ID,
+          ...(output ? { output } : {}),
+          ...(typeof response.linked === "boolean" ? { linked: response.linked } : {}),
+          ...(associationError ? { associationError } : {}),
+        };
+      },
     });
 
-    // A native route. The topbar title/icon default to the nav item above;
-    // here we add a subtitle. Pass { topbar: false } to own the whole page
-    // chrome yourself (host.ui.PageTopbar is available for that).
-    registry.registerRoute("/template", makePluginPage(host), {
-      topbar: { subtitle: "A starter kandev plugin page" },
+    registry.registerTaskAction({
+      id: `${PROVIDER_ID}-link-pull-request`,
+      label: `${LABEL} ${NOUN}`,
+      icon: { render: (h) => giteaIcon(h) },
+      placement: "link",
+      singleTaskOnly: true,
+      async run(context) {
+        const dialog = host.openTaskLinkDialog({
+          title: `Link ${LABEL} ${NOUN}`,
+          description: `Enter a ${LABEL} ${NOUN} URL or reference (owner/repo#number).`,
+          inputLabel: "Pull request",
+          emptyError: `Enter a valid ${LABEL} ${NOUN} reference.`,
+          failureMessage: `Failed to link ${LABEL} ${NOUN}.`,
+          successMessage: `${LABEL} ${NOUN} linked`,
+          inputTestId: `${PROVIDER_ID}-review-reference`,
+          errorTestId: `${PROVIDER_ID}-review-reference-error`,
+          submitTestId: `${PROVIDER_ID}-review-reference-submit`,
+          async onSubmit(reference, signal) {
+            signal.throwIfAborted();
+            const parsed = parseGiteaPullRequestReference(reference);
+            if (!parsed) throw new Error(`Enter a valid ${LABEL} ${NOUN} reference.`);
+            await host.api.invokeAction("change_requests.link", {
+              workspaceId: context.workspaceId, taskId: context.taskId, body: { reference: parsed },
+            }, { signal });
+            await refreshAfterMutation(context.workspaceId, context.taskId, signal);
+          },
+        });
+        overlays.add(dialog);
+      },
     });
 
-    // A WS handler: fires for every task.created message the SPA receives,
-    // regardless of which component is mounted, since the buffer lives at
-    // module scope. Register handlers only for events you actually use.
-    registry.registerWsHandler("task.created", recordTask);
+    registry.registerReviewProvider({
+      id: PROVIDER_ID,
+      label: LABEL,
+      icon: { render: (h) => giteaIcon(h) },
+      changeRequestNoun: NOUN,
+      order: 100,
+      getSnapshot: (taskId) => reviewStore.get(taskId),
+      subscribe: (taskId, listener) => reviewStore.subscribe(taskId, listener),
+      refresh: (taskId, signal) => refreshReviews(taskId, signal),
+      getAssociationSnapshot: (workspaceId) => associationStore.get(workspaceId),
+      subscribeAssociations: (workspaceId, listener) => associationStore.subscribe(workspaceId, listener),
+      refreshAssociations,
+      async unlink({ workspaceId, taskId, connectionScope, repositoryId, changeRequestNumber, signal }) {
+        const number = typeof changeRequestNumber === "string" && /^\d+$/.test(changeRequestNumber)
+          ? positiveInteger(Number(changeRequestNumber)) : positiveInteger(changeRequestNumber);
+        if (!connectionScope.trim() || !repositoryId.trim() || number === undefined)
+          throw new Error("Gitea plugin: cannot unlink an incomplete pull request identity");
+        signal.throwIfAborted();
+        await host.api.invokeAction("change_requests.unlink", {
+          workspaceId, taskId, body: { connection_scope: connectionScope, repository_id: repositoryId, number },
+        }, { signal });
+      },
+      ReviewPanel: (props) => {
+        const review = reviewStore.get(props.taskId).find((c) =>
+          c.reviewKey === props.reviewKey && c.connectionScope === props.connectionScope &&
+          c.repositoryId === props.repositoryId && String(c.changeRequestNumber) === String(props.changeRequestNumber)
+        );
+        return host.jsx(host.ui.ChangeRequestDetail, {
+          detail: review ?? null,
+          presentation: props.presentation,
+          loading: false,
+          error: null,
+        });
+      },
+    });
 
-    // A chat-composer toolbar button.
-    registry.registerComponent("chat-input-actions", makeChatToolbarAction(host));
+    this._overlays = overlays;
+    this._reviewStore = reviewStore;
+    this._associationStore = associationStore;
   },
 
   destroy() {
-    // The host bulk-unregisters everything under this plugin's id; reset local
-    // module state too so a re-enable starts clean.
-    publishRecentTasks([]);
-    recentListeners.clear();
+    if (this._overlays) { this._overlays.forEach((o) => o.close()); this._overlays.clear(); }
+    if (this._reviewStore) this._reviewStore.clear();
+    if (this._associationStore) this._associationStore.clear();
   },
 });

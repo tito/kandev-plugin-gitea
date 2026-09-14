@@ -1,5 +1,5 @@
 {
-  "name": "kandev-plugin-template-contract-tests",
+  "name": "kandev-plugin-gitea-contract-tests",
   "private": true,
   "type": "module",
   "engines": {
