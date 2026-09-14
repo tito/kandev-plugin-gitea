@@ -49,6 +49,7 @@ func (p *giteaPlugin) wireAdapters() {
 	p.Extension.ChangeRequests = &giteaplugin.ChangeRequestService{Host: host}
 	p.Extension.Associations = &giteaplugin.AssociationStore{Host: host}
 	p.Extension.Reviews = &giteaplugin.ReviewReader{Host: host}
+	p.Extension.References = &giteaplugin.ReferenceService{Host: host}
 }
 
 func (p *giteaPlugin) ensureWired() {

@@ -5,7 +5,7 @@ import "fmt"
 type ErrorCode string
 
 const (
-	ErrUnauthenticated ErrorCode = "unauthenticated"
+	ErrUnauthenticated  ErrorCode = "unauthenticated"
 	ErrPermissionDenied ErrorCode = "permission_denied"
 	ErrNotFound         ErrorCode = "not_found"
 	ErrConflict         ErrorCode = "conflict"

@@ -99,9 +99,9 @@ type CreateCommentOption struct {
 }
 
 type CombinedStatus struct {
-	State    string          `json:"state"`
-	Statuses []CommitStatus  `json:"statuses"`
-	SHA      string          `json:"sha"`
+	State    string         `json:"state"`
+	Statuses []CommitStatus `json:"statuses"`
+	SHA      string         `json:"sha"`
 }
 
 type CommitStatus struct {

@@ -189,4 +189,3 @@ func mapStatusState(state string) string {
 		return "neutral"
 	}
 }
-
