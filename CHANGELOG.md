@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4] - 2026-09-15
+
+### Changed
+
+- feat: auto-link pull requests after a detected push (3614fd5)
+
+
 ## [0.1.3] - 2026-09-14
 
 ### Changed
