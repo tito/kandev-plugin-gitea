@@ -18,7 +18,7 @@ run: build
 test: test-backend typecheck-recipes test-recipes
 
 test-backend:
-	go test ./server/... ./recipes/source-control/server/...
+	go test ./server/... ./internal/... ./recipes/source-control/server/...
 
 test-recipes:
 	npm run test:recipes
@@ -33,7 +33,7 @@ fmt:
 	gofmt -l .
 
 vet:
-	go vet ./server/... ./recipes/source-control/server/...
+	go vet ./server/... ./internal/... ./recipes/source-control/server/...
 
 package:
 	rm -rf $(STAGE)

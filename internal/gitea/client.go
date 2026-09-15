@@ -201,3 +201,10 @@ func readError(resp *http.Response) error {
 func (c *Client) BaseURL() string {
 	return strings.TrimSuffix(c.baseURL.String(), "/")
 }
+
+// SetHTTPClient replaces the underlying HTTP client; used by tests to trust a local TLS server.
+func (c *Client) SetHTTPClient(httpClient *http.Client) {
+	if httpClient != nil {
+		c.httpClient = httpClient
+	}
+}

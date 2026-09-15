@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
@@ -50,8 +51,17 @@ func (h *fakeHost) DeleteState(_ context.Context, scope, scopeID, key string) er
 	return nil
 }
 
-func (h *fakeHost) ListState(context.Context, string, string) ([]pluginsdk.StateEntry, error) {
-	return nil, nil
+func (h *fakeHost) ListState(_ context.Context, scope, scopeID string) ([]pluginsdk.StateEntry, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prefix := scope + "/" + scopeID + "/"
+	var entries []pluginsdk.StateEntry
+	for k, v := range h.state {
+		if strings.HasPrefix(k, prefix) {
+			entries = append(entries, pluginsdk.StateEntry{Key: strings.TrimPrefix(k, prefix), Value: v})
+		}
+	}
+	return entries, nil
 }
 
 func (h *fakeHost) GetConfig(context.Context) (map[string]any, error) {

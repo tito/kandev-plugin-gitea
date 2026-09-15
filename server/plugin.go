@@ -20,6 +20,8 @@ const (
 type giteaPlugin struct {
 	pluginsdk.UnimplementedPlugin
 	sourcecontrol.Extension
+	pushDetector  *giteaplugin.PushDetector
+	linkAfterPush func(ctx context.Context, taskID, repositoryName, branch string) error
 }
 
 var (
@@ -30,7 +32,7 @@ var (
 )
 
 func newPlugin() *giteaPlugin {
-	p := &giteaPlugin{}
+	p := &giteaPlugin{pushDetector: giteaplugin.NewPushDetector()}
 	p.Extension = sourcecontrol.Extension{
 		ProviderID:      providerID,
 		ReferenceSource: referenceSource,
@@ -50,6 +52,9 @@ func (p *giteaPlugin) wireAdapters() {
 	p.Extension.Associations = &giteaplugin.AssociationStore{Host: host}
 	p.Extension.Reviews = &giteaplugin.ReviewReader{Host: host}
 	p.Extension.References = &giteaplugin.ReferenceService{Host: host}
+	if p.linkAfterPush == nil {
+		p.linkAfterPush = giteaplugin.NewPushLinker(host).LinkAfterPush
+	}
 }
 
 func (p *giteaPlugin) ensureWired() {
@@ -59,9 +64,32 @@ func (p *giteaPlugin) ensureWired() {
 }
 
 func (p *giteaPlugin) OnEvent(_ context.Context, e *pluginsdk.Event) error {
-	log.Printf("gitea plugin: event type=%s id=%s", e.EventType, e.EventID)
 	p.ensureWired()
+	if strings.HasPrefix(e.EventType, "git.event.") {
+		p.handleGitEvent(e)
+		return nil
+	}
+	log.Printf("gitea plugin: event type=%s id=%s", e.EventType, e.EventID)
 	return nil
+}
+
+func (p *giteaPlugin) handleGitEvent(e *pluginsdk.Event) {
+	status, ok := giteaplugin.ParseGitStatusEvent(e.Payload)
+	if !ok {
+		return
+	}
+	if !p.pushDetector.Observe(status.SessionID, status.RepositoryName, status.RemoteAhead, status.RemoteBranch) {
+		return
+	}
+	if p.linkAfterPush == nil {
+		return
+	}
+	log.Printf("gitea plugin: push detected session=%s task=%s branch=%s", status.SessionID, status.TaskID, status.Branch)
+	go func() {
+		if err := p.linkAfterPush(context.Background(), status.TaskID, status.RepositoryName, status.Branch); err != nil {
+			log.Printf("gitea plugin: link pull request after push: %v", err)
+		}
+	}()
 }
 
 func (p *giteaPlugin) HandleAction(ctx context.Context, req *pluginsdk.PluginActionRequest) (*pluginsdk.PluginActionResponse, error) {
